@@ -1,0 +1,11 @@
+{
+  "happy": [
+    "happy.jpeg"
+  ],
+  "sad": [
+    "sad.png"
+  ],
+  "angry": [
+    "angry.webp"
+  ]
+}
