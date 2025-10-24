@@ -5,14 +5,16 @@ from deepface import DeepFace
 import json
 
 class ExpressionMatcher:
-    def __init__(self, expression_mapping_file='nailoong_expressions.json'):
+    def __init__(self, expression_mapping_file='expressions.json', image_directory='images'):
         """
         Initialize the expression matcher.
 
         Args:
-            expression_mapping_file: JSON file mapping expressions to nailoong images
+            expression_mapping_file: JSON file mapping expressions to character images
+            image_directory: Directory containing the character/expression images
         """
         self.mapping_file = Path(expression_mapping_file)
+        self.image_directory = Path(image_directory)
         self.expression_images = self.load_expression_mapping()
 
         # Load face cascade for detection
@@ -31,7 +33,7 @@ class ExpressionMatcher:
         self.frame_count = 0
 
     def load_expression_mapping(self):
-        """Load the mapping of expressions to nailoong images."""
+        """Load the mapping of expressions to character images."""
         if not self.mapping_file.exists():
             # Create a default mapping file
             default_mapping = {
@@ -45,10 +47,9 @@ class ExpressionMatcher:
             }
 
             # Try to auto-detect based on filenames
-            nailoong_dir = Path('nailoong')
-            if nailoong_dir.exists():
-                image_extensions = ['.png', '.jpg', '.jpeg', '.webp']
-                all_images = [str(f.name) for f in nailoong_dir.iterdir()
+            if self.image_directory.exists():
+                image_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']
+                all_images = [str(f.name) for f in self.image_directory.iterdir()
                              if f.suffix.lower() in image_extensions]
 
                 # Put all images in neutral for now
@@ -59,15 +60,15 @@ class ExpressionMatcher:
                 json.dump(default_mapping, f, indent=2)
 
             print(f"Created default expression mapping file: {self.mapping_file}")
-            print("Please edit this file to map your nailoong images to expressions!")
+            print("Please edit this file to map your images to expressions!")
 
             return default_mapping
 
         with open(self.mapping_file, 'r') as f:
             return json.load(f)
 
-    def get_nailoong_for_expression(self, expression):
-        """Get a nailoong image for the given expression."""
+    def get_image_for_expression(self, expression):
+        """Get a character image for the given expression."""
         expression = expression.lower()
 
         # Check if we have images for this expression
@@ -87,7 +88,7 @@ class ExpressionMatcher:
 
         # Load from cache or disk
         if image_name not in self.image_cache:
-            image_path = Path('nailoong') / image_name
+            image_path = self.image_directory / image_name
             img = cv2.imread(str(image_path))
             if img is not None:
                 self.image_cache[image_name] = img
@@ -119,7 +120,7 @@ class ExpressionMatcher:
     def run(self):
         """Run the expression matching loop."""
         print("Expression Matcher started!")
-        print("Make different facial expressions to see matching nailoong images!")
+        print("Make different facial expressions to see matching images!")
         print("Press 's' to save a picture")
         print("Press 'q' to quit")
         print()
@@ -139,42 +140,57 @@ class ExpressionMatcher:
 
             self.frame_count += 1
 
-            # Get the corresponding nailoong image
-            nailoong_img = self.get_nailoong_for_expression(self.current_expression)
+            # Get the corresponding character image
+            char_img = self.get_image_for_expression(self.current_expression)
 
-            # Create display frame
-            display_frame = frame.copy()
+            # Create a cleaner UI with side-by-side view
+            h, w, _ = frame.shape
 
-            # Display current expression
+            # Prepare character image
+            if char_img is not None:
+                # Resize image to match camera feed height
+                aspect_ratio = char_img.shape[1] / char_img.shape[0]
+                char_h = h
+                char_w = int(char_h * aspect_ratio)
+                char_resized = cv2.resize(char_img, (char_w, char_h))
+            else:
+                # Create a placeholder if no image is found
+                char_h = h
+                char_w = int(h * 0.75)  # Placeholder width
+                char_resized = np.full((char_h, char_w, 3), (220, 220, 220), dtype=np.uint8)
+                text = f"No image for '{self.current_expression}'"
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                (text_w, text_h), _ = cv2.getTextSize(text, font, 0.8, 2)
+                text_x = (char_w - text_w) // 2
+                text_y = (char_h + text_h) // 2
+                cv2.putText(char_resized, text, (text_x, text_y), font, 0.8, (100, 100, 100), 2)
+
+            # Create the new layout with a bottom bar for text
+            bar_height = 50
+            total_width = w + char_w
+            total_height = h + bar_height
+
+            # Black canvas
+            display_frame = np.zeros((total_height, total_width, 3), dtype=np.uint8)
+
+            # Place camera feed and character image
+            display_frame[0:h, 0:w] = frame
+            display_frame[0:h, w:w + char_w] = char_resized
+
+            # Add expression text on the bottom bar
+            text = f"Expression: {self.current_expression.capitalize()}"
             cv2.putText(
                 display_frame,
-                f"Expression: {self.current_expression}",
-                (10, 30),
+                text,
+                (20, h + bar_height - 15),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 1,
-                (0, 255, 0),
-                2
+                (255, 255, 255),
+                2,
             )
 
-            # Display the nailoong image if available
-            if nailoong_img is not None:
-                # Resize nailoong to take up more of the screen (2/3 of height)
-                h, w = display_frame.shape[:2]
-                nailoong_height = int(h * 0.66)  # Make it bigger - 2/3 of screen height
-                aspect_ratio = nailoong_img.shape[1] / nailoong_img.shape[0]
-                nailoong_width = int(nailoong_height * aspect_ratio)
-
-                nailoong_resized = cv2.resize(nailoong_img, (nailoong_width, nailoong_height))
-
-                # Place in top-right corner
-                x_offset = w - nailoong_width - 10
-                y_offset = 10
-
-                display_frame[y_offset:y_offset+nailoong_height,
-                             x_offset:x_offset+nailoong_width] = nailoong_resized
-
             # Show the frame
-            cv2.imshow('Nailoong Expression Matcher', display_frame)
+            cv2.imshow('Expression Matcher', display_frame)
 
             # Handle key presses
             key = cv2.waitKey(1) & 0xFF
@@ -185,7 +201,7 @@ class ExpressionMatcher:
                 # Save the current frame
                 output_dir = Path('output')
                 output_dir.mkdir(exist_ok=True)
-                filename = output_dir / f'nailoong_expression_{saved_count:03d}.png'
+                filename = output_dir / f'expression_{saved_count:03d}.png'
                 cv2.imwrite(str(filename), display_frame)
                 print(f"Saved: {filename}")
                 saved_count += 1
@@ -196,15 +212,43 @@ class ExpressionMatcher:
 
 
 def main():
-    # Check for nailoong images
-    nailoong_dir = Path('nailoong')
+    import argparse
 
-    if not nailoong_dir.exists():
-        print("Error: 'nailoong' directory not found!")
+    parser = argparse.ArgumentParser(description='Expression Matcher - Match facial expressions to character images')
+    parser.add_argument('--images', '-i', default='images',
+                       help='Directory containing your character images (default: images)')
+    parser.add_argument('--mapping', '-m', default='expressions.json',
+                       help='JSON file mapping expressions to images (default: expressions.json)')
+
+    args = parser.parse_args()
+
+    # Check for image directory
+    image_dir = Path(args.images)
+
+    if not image_dir.exists():
+        print(f"Error: Image directory '{args.images}' not found!")
+        print(f"\nPlease create the directory and add your character images:")
+        print(f"  mkdir {args.images}")
+        print(f"  # Then add your .png, .jpg, .jpeg, or .webp files to {args.images}/")
         return
 
+    # Check if directory has any images
+    image_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']
+    images = [f for f in image_dir.iterdir() if f.suffix.lower() in image_extensions]
+
+    if not images:
+        print(f"Error: No images found in '{args.images}' directory!")
+        print(f"\nPlease add image files (.png, .jpg, .jpeg, .webp, etc.) to the directory.")
+        return
+
+    print(f"Found {len(images)} image(s) in '{args.images}' directory")
+    print()
+
     # Create and run matcher
-    matcher = ExpressionMatcher()
+    matcher = ExpressionMatcher(
+        expression_mapping_file=args.mapping,
+        image_directory=args.images
+    )
     matcher.run()
 
 
